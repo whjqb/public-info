@@ -1,0 +1,19 @@
+doc_campsites:
+  api_key_env_var: "DOC_API_KEY"
+  url: "https://api.doc.govt.nz/v2/campsites"
+  headers:
+    Content-Type: "application/json"
+    x-api-key: ""
+
+doc_campsites_alerts:
+  api_key_env_var: "DOC_API_KEY"
+  url: "https://api.doc.govt.nz/v2/campsites/alerts"
+  headers:
+    Content-Type: "application/json"
+    x-api-key: ""
+
+logging:
+  log_directory: "api/log"
+
+data:
+  data_directory: "api/data"
