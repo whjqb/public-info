@@ -1,19 +1,18 @@
-doc_campsites:
+doc:
   api_key_env_var: "DOC_API_KEY"
-  url: "https://api.doc.govt.nz/v2/campsites"
+  log_level: 20
+  max_retries: 3
+  timeout: 30
   headers:
     Content-Type: "application/json"
     x-api-key: ""
-
-doc_campsites_alerts:
-  api_key_env_var: "DOC_API_KEY"
-  url: "https://api.doc.govt.nz/v2/campsites/alerts"
-  headers:
-    Content-Type: "application/json"
-    x-api-key: ""
+  urls:
+    campsites: "https://api.doc.govt.nz/v2/campsites"
+    campsites_alerts: "https://api.doc.govt.nz/v2/campsites/alerts"
+    campsites_detail: "https://api.doc.govt.nz/v2/campsites/{id}/detail"
 
 logging:
   log_directory: "api/log"
 
 data:
-  data_directory: "api/data"
+  data_directory: "api/data/raw"
