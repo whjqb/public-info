@@ -1,9 +1,12 @@
 with source as 
 (
-    select * from {{ source('doc', 'doc_campsites_detail') }}
+    select 
+        raw_data, 
+        row_number() over (partition by file_name order by id desc) as row_number 
+    from {{ source('doc', 'doc_campsites_detail') }}
 )
 
-select
+select 
     cast(raw_data ->> 'assetId' as int) as asset_id,
     raw_data ->> 'name' as name,
     raw_data ->> 'place' as place,
@@ -24,3 +27,5 @@ select
     cast(raw_data ->> 'y' as float) as northing, 
     current_timestamp as loaded_at
 from source
+where
+    source.row_number = 1

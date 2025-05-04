@@ -2,96 +2,64 @@ import json
 import os
 import logging
 from pathlib import Path
-import psycopg2
 from psycopg2.extras import Json
 from datetime import datetime
-from typing import Dict, List, Any
 import shutil
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+from utils import DBConnection, AppLogger, WORKSPACE_ROOT
 
 class PostgresLoader:
-    def __init__(self, db_params: Dict[str, str]):
+    def __init__(self, log_level: int = logging.INFO):
         """Initialize the PostgreSQL loader with database parameters."""
-        self.db_params = db_params
-        self.conn = None
-        self.cur = None
-        
-    def connect(self):
-        """Establish connection to PostgreSQL database."""
-        try:
-            self.conn = psycopg2.connect(**self.db_params)
-            self.cur = self.conn.cursor()
-            logging.info("Successfully connected to PostgreSQL database")
-        except Exception as e:
-            logging.error(f"Error connecting to PostgreSQL: {str(e)}")
-            raise
-            
-    def disconnect(self):
-        """Close the database connection."""
-        if self.cur:
-            self.cur.close()
-        if self.conn:
-            self.conn.close()
-            logging.info("Database connection closed")
-
-    def drop_tables(self, table_name: str) -> None:
-        """Drop tables in PostgreSQL."""
-        try:
-            self.cur.execute(f"DROP TABLE IF EXISTS {table_name}")
-            self.conn.commit()
-            logging.info(f"Table {table_name} dropped successfully")
-        except Exception as e:
-            self.conn.rollback()
-            logging.error(f"Error dropping table {table_name}: {str(e)}")
-            raise
-            
-    def create_tables(self, table_name: str) -> None:
-        """Create necessary tables in PostgreSQL."""
-        try:
-            # Create campsites table
-            self.cur.execute(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY,file_name VARCHAR(255), data JSONB)")
-            self.conn.commit()
-            logging.info(f"Table {table_name} created successfully")
-        except Exception as e:
-            self.conn.rollback()
-            logging.error(f"Error creating table {table_name}: {str(e)}")
-            raise
+        self.log_level = log_level
+        self.logger = self.__get_logger()
+        self.db_connection = DBConnection(logger=self.logger)
+    
+    def __get_logger(self) -> AppLogger:
+        """Get the logger instance."""
+        log_dir = Path('doc') / datetime.now().strftime('%Y') / datetime.now().strftime('%m') / datetime.now().strftime('%d')
+        return AppLogger(name="load_to_postgres", log_dir=log_dir, log_file="load_to_postgres.log", level=self.log_level).get_logger()
             
     def load_json_to_table(self, json_file: str, table_name: str, truncate: bool = False) -> None:
         """Load JSON data to a table in PostgreSQL."""
         try:
+            file_path = Path(json_file)
             # Read and parse JSON file
             with open(json_file, 'r') as f:
                 json_object = json.load(f)
-            
+            self.db_connection.connect()
             if truncate:
-                self.cur.execute(f"TRUNCATE TABLE {table_name} RESTART IDENTITY CASCADE")
+                self.db_connection.execute_query(query=f"DROP TABLE IF EXISTS {table_name}")
+                self.db_connection.execute_query(
+                    query=f"""
+                        CREATE TABLE {table_name} (
+                            id INT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1),
+                            file_path VARCHAR(255), 
+                            file_name VARCHAR(255), 
+                            loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            raw_data JSONB)
+                    """
+                )
 
             # Insert JSON data into table
-            self.cur.execute(
-                f"INSERT INTO {table_name} (file_name, data) VALUES (%s, %s)",
-                (json_file, json.dumps(json_object),)
+            self.db_connection.execute_query(
+                query=f"INSERT INTO {table_name} (file_path, file_name, raw_data) VALUES (%s, %s, %s)",
+                params=(str(file_path.parent), str(file_path.name), json.dumps(json_object),)
             )
-            self.conn.commit()
-            logging.info(f"Successfully loaded JSON data from {json_file} into {table_name}")
-            
+            self.logger.info(f"Successfully loaded JSON data from {json_file} into {table_name}")
         except json.JSONDecodeError as e:
-            self.conn.rollback()
-            logging.error(f"Error parsing JSON file {json_file}: {str(e)}")
+            self.db_connection.rollback()
+            self.logger.error(f"Error parsing JSON file {json_file}: {str(e)}")
             raise
         except IOError as e:
-            self.conn.rollback()
+            self.db_connection.rollback()
             logging.error(f"Error reading file {json_file}: {str(e)}")
             raise
         except Exception as e:
-            self.conn.rollback()
-            logging.error(f"Error loading JSON data into {table_name}: {str(e)}")
+            self.db_connection.rollback()
+            self.logger.error(f"Error loading JSON data into {table_name}: {str(e)}")
             raise
+        finally:
+            self.db_connection.disconnect()
             
     def archive_json_file(self, json_file: str, archive_dir: str) -> None:
         """Archive JSON file by moving it to the specified archive folder.
@@ -101,19 +69,21 @@ class PostgresLoader:
             archive_dir: Path to the archive directory
         """
         try:
-            # Create archive directory if it doesn't exist
-            os.makedirs(archive_dir, exist_ok=True)
-            
-            # Get the filename and create archive path
-            filename = os.path.basename(json_file)
-            archive_path = os.path.join(archive_dir, filename)
-            
-            # Move the file to archive directory
-            shutil.move(json_file, archive_path)
-            logging.info(f"Successfully archived {json_file} to {archive_path}")
+            source = Path(json_file)
+            target = Path(archive_dir)
+            if target.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.move(json_file, target)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    target.unlink()
+                source.rename(target)
+
+            self.logger.info(f"Successfully archived {json_file} to {archive_dir}")
             
         except Exception as e:
-            logging.error(f"Error archiving file {json_file} to {archive_dir}: {str(e)}")
+            self.logger.error(f"Error archiving file {json_file} to {archive_dir}: {str(e)}")
             raise
             
     def process_directory(self, base_dir: str, table_name: str, truncate: bool = False) -> None:
@@ -125,9 +95,13 @@ class PostgresLoader:
             truncate: Whether to truncate the table before loading
         """
         try:
-            # Create archive directory in the same parent directory as base_dir
-            archive_dir = base_dir.replace('raw', 'archive')
-            logging.info(f"Using archive directory: {archive_dir}")
+            self.logger.info(f"Loading table {table_name} from {base_dir}")
+            if base_dir is None:
+                self.logger.error("Base directory is None")
+                
+            if os.path.isfile(base_dir):
+                base_dir = os.path.dirname(base_dir)
+            
             # Process all JSON files in the directory
             for root, _, files in os.walk(base_dir):
                 for file in files:
@@ -135,63 +109,22 @@ class PostgresLoader:
                         file_path = os.path.join(root, file)
                         try:
                             # Load JSON data to database
-                            self.load_json_to_table(file_path, table_name=table_name, truncate=truncate)
+                            if truncate:
+                                # only truncate the table for the first file
+                                self.load_json_to_table(file_path, table_name=table_name, truncate=truncate)
+                                truncate = False
+                            else:
+                                self.load_json_to_table(file_path, table_name=table_name)
                             
                             # Archive the file after successful loading
+                            archive_dir = str(file_path).replace('raw', 'archive')
                             self.archive_json_file(file_path, archive_dir)
                             
                         except Exception as e:
-                            logging.error(f"Error processing file {file_path}: {str(e)}")
+                            self.logger.error(f"Error processing file {file_path}: {str(e)}")
                             continue
                             
         except Exception as e:
-            logging.error(f"Error processing directory {base_dir}: {str(e)}")
+            self.logger.error(f"Error processing directory {base_dir}: {str(e)}")
             raise
 
-def main():
-    # Database connection parameters
-    db_params = {
-        'dbname': 'raw',
-        'user': 'postgres',
-        'password': 'whjqb1984',
-        'host': '192.168.1.214',
-        'port': '5432'
-    }
-    
-    # Get the absolute path of the project root
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    
-    # Base directory containing JSON files
-    base_dir = os.path.join(project_root, 'api', 'data', 'raw', 'doc')
-    logging.info(f"Using base directory: {base_dir}")
-    
-    # Initialize loader
-    loader = PostgresLoader(db_params)
-    
-    try:
-        # Connect to database
-        loader.connect()
-        
-        # Drop tables
-        # loader.drop_tables('doc.campsites')
-        loader.drop_tables('doc.campsites_alerts')
-        loader.drop_tables('doc.campsites_detail')
-        
-        # Create tables
-        # loader.create_tables('doc.campsites')
-        loader.create_tables('doc.campsites_alerts')
-        loader.create_tables('doc.campsites_detail')
-        
-        # loader.process_directory(os.path.join(base_dir,'campsites'), 'doc.campsites')
-
-        # Process all JSON files
-        # loader.process_directory(base_dir)
-        
-    except Exception as e:
-        logging.error(f"Error in main process: {str(e)}")
-    finally:
-        # Disconnect from database
-        loader.disconnect()
-
-if __name__ == "__main__":
-    main() 

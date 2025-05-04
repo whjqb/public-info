@@ -10,9 +10,3 @@ doc:
     campsites: "https://api.doc.govt.nz/v2/campsites"
     campsites_alerts: "https://api.doc.govt.nz/v2/campsites/alerts"
     campsites_detail: "https://api.doc.govt.nz/v2/campsites/{id}/detail"
-
-logging:
-  log_directory: "api/log"
-
-data:
-  data_directory: "api/data/raw"

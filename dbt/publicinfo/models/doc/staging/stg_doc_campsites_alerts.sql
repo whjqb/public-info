@@ -1,6 +1,9 @@
 with source as
 (
-    select * from {{ source('doc', 'doc_campsites_alerts') }}
+    select 
+        raw_data, 
+        row_number() over (partition by file_name order by id desc) as row_number 
+    from {{ source('doc', 'doc_campsites_alerts') }}
 ),
 
 flattened_alerts as 
@@ -13,6 +16,8 @@ flattened_alerts as
     from 
         source,
         lateral jsonb_array_elements(raw_data) as json_data
+    where 
+        source.row_number = 1
 )
 
 select 
